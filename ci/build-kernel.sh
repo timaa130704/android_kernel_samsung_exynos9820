@@ -27,8 +27,10 @@ SLOT="1"
 OUT_BASE=""
 AK3_REPO="${AK3_REPO:-https://github.com/Lordify97/AnyKernel.git}"
 
-# clang 12 - same major version the tree's build.config.universal9820 asks for
-# (CLANG_VERSION=clang-4691093, which AOSP has since pruned from its prebuilts).
+# AOSP prebuilt clang. r450784d is clang 14, the closest still-published build
+# to the clang-4691093 (clang 12) this tree asks for in
+# build.config.universal9820 - AOSP has since pruned the clang 12 prebuilts.
+# Override with --toolchain-url / CLANG_URL if a full build trips over it.
 DEFAULT_CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz"
 
 die() { echo "::error::$*" >&2; exit 1; }
@@ -154,12 +156,19 @@ if [ "$MODE" = "verify" ]; then
     step "Verify mode: preparing headers"
     make -C "$KERNEL_DIR" O="$OUT_DIR" modules_prepare LLVM=1
 
+    # modules_prepare is not enough for an out-of-tree-style object build:
+    # this tree generates compile.h from init/Makefile and flask.h +
+    # av_permissions.h from security/selinux/Makefile, and ReSukiSu includes
+    # security.h / objsec.h, which need flask.h. Both directories are small.
+    step "Verify mode: generating compile.h and flask.h"
+    make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" LLVM=1 init/ security/selinux/
+
     step "Verify mode: compiling drivers/kernelsu/ only"
     # This is the whole point of verify mode: ReSukiSU's Kbuild runs
     # inline_hook_check.mk / susfs_compat.mk here and hard-errors on any
-    # missing or leftover hook, before a single kernel .o is compiled.
+    # missing or leftover hook, before the rest of the kernel is compiled.
     make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" LLVM=1 drivers/kernelsu/
-    echo "::notice::ReSukiSU compiled and all hook gates passed."
+    echo "::notice::ReSukiSu compiled and all hook gates passed."
     exit 0
 fi
 
