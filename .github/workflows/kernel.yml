@@ -1,0 +1,129 @@
+name: Kernel build
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "verify = compile ReSukiSU only, fast, fits GitHub-hosted runners. full = Image + AnyKernel3 zip, needs a big runner."
+        type: choice
+        default: verify
+        options: [verify, full]
+      device:
+        description: "Device codename"
+        type: choice
+        default: beyond1lte
+        options:
+          [beyond0lte, beyond1lte, beyond2lte, beyondx, d1, d1x, d2s, d2x, f62]
+      runner:
+        description: "github-hosted (Ubuntu, ~14 GB disk - verify mode only) or self-hosted (any Linux box with 60 GB+)"
+        type: choice
+        default: github-hosted
+        options: [github-hosted, self-hosted]
+      slot:
+        description: "AnyKernel IS_SLOT_DEVICE. 1 for A/B devices (correct for beyond1lte on Android 16), 0 for single-slot."
+        type: choice
+        default: "1"
+        options: ["1", "0"]
+      clang_url:
+        description: "Toolchain tarball (AOSP clang 12 by default). Only used on github-hosted."
+        type: string
+        default: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: "${{ inputs.mode }} / ${{ inputs.device }}"
+    runs-on: ${{ inputs.runner == 'self-hosted' && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.mode == 'full' && 350 || 75 }}
+
+    steps:
+      - name: Checkout (with ReSukiSU submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Show runner facts
+        run: |
+          echo "### Runner" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mode: \`${{ inputs.mode }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- device: \`${{ inputs.device }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- runner: \`${{ runner.os }}\` / \`${{ runner.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- cores: \`$(nproc)\`, disk free: \`$(df -h . | tail -1 | awk '{print $4}')\`" >> "$GITHUB_STEP_SUMMARY"
+          echo ""
+          echo "> \`full\` mode needs roughly 40 GB of free disk and several hours." \
+               "A standard GitHub-hosted runner has ~14 GB, so use \`verify\` there" \
+               "or point \`runner\` at a self-hosted machine." >> "$GITHUB_STEP_SUMMARY"
+          nproc; free -h; df -h .
+
+      - name: Verify ReSukiSU submodule is present
+        run: |
+          set -e
+          test -f .gitmodules
+          grep -A2 'submodule "KernelSU"' .gitmodules
+          test -e drivers/kernelsu/Kbuild \
+            || { echo "::error::drivers/kernelsu/Kconfig missing - submodule not checked out"; exit 1; }
+          echo "ReSukiSU revision: $(git -C KernelSU rev-parse --short HEAD)"
+
+      - name: Install build dependencies
+        if: inputs.runner == 'github-hosted'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            bc bison ccache flex zip rsync python3 libssl-dev libncurses-dev \
+            dwarves ca-certificates curl git
+          sudo rm -rf /usr/share/dotnet
+          df -h /
+
+      - name: Cache toolchain
+        if: inputs.runner == 'github-hosted'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kernel-toolchain
+          key: clang-${{ hashFiles('ci/build-kernel.sh') }}
+
+      - name: Build
+        env:
+          CLANG_URL: ${{ inputs.clang_url }}
+        run: |
+          chmod +x ci/build-kernel.sh
+          ci/build-kernel.sh \
+            --device "${{ inputs.device }}" \
+            --mode   "${{ inputs.mode }}" \
+            --slot   "${{ inputs.slot }}"
+
+      - name: Upload AnyKernel3 zip
+        if: inputs.mode == 'full'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ inputs.device }}-anykernel3
+          path: out/packages/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload out-of-tree kernel image
+        if: inputs.mode == 'full'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ inputs.device }}-Image
+          path: out/${{ inputs.device }}/arch/arm64/boot/Image
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to a rolling release
+        if: inputs.mode == 'full'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ci-${{ inputs.device }}
+          name: "CI build - ${{ inputs.device }}"
+          prerelease: true
+          body: |
+            Automated build of branch `${{ github.ref_name }}` (commit `${{ github.sha }}`).
+
+            Flash the zip from TWRP, or `adb sideload` it from recovery.
+            See `docs/FLASHING.md`.
+          files: out/packages/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
