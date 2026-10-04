@@ -69,7 +69,7 @@ echo "kernel dir : $KERNEL_DIR"
 echo "device     : $DEVICE ($DEFCONFIG)"
 echo "mode       : $MODE"
 echo "slot       : $SLOT"
-echo "disk free  : $(df -BG1 "$KERNEL_DIR" | awk 'NR==2{print $4}')"
+echo "disk free  : $(df -BG1 "$KERNEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
 
 export ARCH=arm64
 export SUBARCH=arm64
@@ -90,17 +90,23 @@ fi
 # --------------------------------------------------------------------------
 step "Toolchain"
 # --------------------------------------------------------------------------
+# Resolution order matters. GitHub-hosted images ship clang 18, and picking
+# that up silently is the worst outcome: a 4.14 tree does not build with it,
+# and Ubuntu's clang package ships no ld.lld either. So a pinned toolchain
+# always wins over whatever happens to be on PATH.
 CLANG_BIN=""
 if [ -n "${CLANG_DIR:-}" ] && [ -x "$CLANG_DIR/bin/clang" ]; then
     CLANG_BIN="$CLANG_DIR/bin"
-elif command -v clang >/dev/null 2>&1; then
+    echo "using CLANG_DIR=$CLANG_DIR"
+elif [ "${ALLOW_SYSTEM_CLANG:-0}" = "1" ] && command -v clang >/dev/null 2>&1; then
     CLANG_BIN="$(dirname "$(command -v clang)")"
+    echo "::warning::using the system clang from PATH - this is unlikely to build a 4.14 tree"
 else
     URL="${CLANG_URL:-$DEFAULT_CLANG_URL}"
     CACHE="${TOOLCHAIN_CACHE:-$HOME/.cache/kernel-toolchain}"
     mkdir -p "$CACHE"
     if [ ! -x "$CACHE/clang/bin/clang" ]; then
-        echo "downloading toolchain: $URL"
+        echo "downloading pinned toolchain: $URL"
         curl -fSL --retry 3 -o "$CACHE/toolchain.tar.gz" "$URL" \
             || die "toolchain download failed. Override with --toolchain-url or set CLANG_DIR."
         rm -rf "$CACHE/clang"; mkdir -p "$CACHE/clang"
@@ -109,7 +115,14 @@ else
         [ -x "$CACHE/clang/bin/clang" ] || die "archive did not contain bin/clang"
     fi
     CLANG_BIN="$CACHE/clang/bin"
+    echo "using pinned toolchain in $CACHE"
 fi
+
+# LLVM=1 needs the matching binutils in the same directory. Catching this here
+# gives a readable error instead of a bare "ld.lld: not found" from make.
+for tool in clang ld.lld llvm-ar; do
+    [ -x "$CLANG_BIN/$tool" ] || die "$CLANG_BIN/$tool is missing - the toolchain is incomplete or is not an AOSP clang bundle"
+done
 export PATH="$CLANG_BIN:$PATH"
 echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
 
