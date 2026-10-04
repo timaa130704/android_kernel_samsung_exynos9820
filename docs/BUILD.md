@@ -20,12 +20,18 @@ git checkout resukisu-qpr2
 ./ci/build-kernel.sh --device beyond1lte --mode verify
 ```
 
-Тулчейн подтягивается автоматически (AOSP clang 12) и кэшируется в
-`~/.cache/kernel-toolchain`. Чтобы использовать свой:
+Тулчейн подтягивается автоматически и кэшируется в `~/.cache/kernel-toolchain`. По умолчанию
+это AOSP `clang-r450784d` — **clang 14.0.6**, ближайший из ещё опубликованных к тому,
+что просит само дерево (`build.config.universal9820`: `CLANG_VERSION=clang-4691093`,
+то есть clang 12; эти пребилты AOSP уже удалил). Чтобы использовать свой:
 
 ```bash
 CLANG_DIR=/path/to/clang ./ci/build-kernel.sh --device beyond1lte
 ```
+
+> Скрипт **всегда** предпочитает закреплённый тулчейн системному `clang` из `PATH`.
+> На GitHub-hosted в образе лежит clang 18, а дерево 4.14 на нём не собирается —
+> использовать системный clang можно только осознанно, через `ALLOW_SYSTEM_CLANG=1`.
 
 ### Ключи
 
@@ -39,6 +45,32 @@ CLANG_DIR=/path/to/clang ./ci/build-kernel.sh --device beyond1lte
 
 Результат полной сборки: `out/packages/FrEeRuNnErKeRnEl-<device>-<ver>-ReSukiSu-AnyKernel3.zip`.
 Как его прошить — в [`FLASHING.md`](FLASHING.md).
+
+## Статус проверки
+
+Прогон `mode: verify`, девайс `beyond1lte`, GitHub-hosted — **успешно** (3 мин 42 с):
+<https://github.com/timaa130704/android_kernel_samsung_exynos9820/actions/runs/37208641381>
+
+```
+-- ReSukiSU version code: 30701
+-- KERNEL_VERSION: 4.14
+-- KERNEL_TYPE: Non-GKI
+-- ReSukiSU: using SuSFS Inline hook
+-- ReSukiSU/susfs_inline: ksu_handle_setresuid found
+-- ReSukiSU/susfs_inline: ksu_handle_execveat found
+-- ReSukiSU/susfs_inline: ksu_handle_faccessat found
+-- ReSukiSU/susfs_inline: ksu_handle_sys_read found
+-- ReSukiSU/susfs_inline: ksu_handle_stat found
+-- ReSukiSU/susfs_inline: ksu_handle_sys_reboot found
+-- ReSukiSU/susfs_inline: ksu_handle_input_handle_event found
+```
+
+То есть все хук-гейты ReSukiSu прошли, а весь код `drivers/kernelsu/` собрался
+(21 объект, включая `core/`, `policy/`, `feature/`, `hook/`, `infra/`, `runtime/`,
+`selinux/`, `sulog/`, `supercall/`) тулчейном clang 14 поверх ядра 4.14.
+
+**Что этим НЕ проверено:** линковка всего ядра и работоспособность на устройстве.
+Для этого нужен `mode: full` — то есть self-hosted runner.
 
 ## Два режима и зачем они разные
 
