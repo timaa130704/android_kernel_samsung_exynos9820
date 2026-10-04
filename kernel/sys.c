@@ -713,6 +713,11 @@ error:
 }
 
 
+#ifdef CONFIG_KSU
+extern __attribute__((cold)) int ksu_handle_setresuid(uid_t ruid, uid_t euid,
+						       uid_t suid);
+#endif
+
 /*
  * This function implements a generic ability to update ruid, euid,
  * and suid.  This allows you to implement the 4.4 compatible seteuid().
@@ -736,7 +741,15 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
 		return -EINVAL;
 
 	if ((suid != (uid_t) -1) && !uid_valid(ksuid))
-		return -EINVAL;	
+		return -EINVAL;
+#ifdef CONFIG_KSU
+	{
+		int ksu_ret = ksu_handle_setresuid(ruid, euid, suid);
+
+		if (unlikely(ksu_ret))
+			return ksu_ret;
+	}
+#endif
 	
 #if defined CONFIG_SEC_RESTRICT_SETUID
 	if(kruid.val == 0 || keuid.val == 0 || ksuid.val == 0)
